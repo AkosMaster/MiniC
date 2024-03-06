@@ -12,36 +12,27 @@ class ValueRef;
 class AsmVar {
 public:
 	std::string name;
-	ValueRef* val;
+	//ValueRef* val;
+	int reg=-1;
 	int scope = 999;
-};
-
-class RegisterFrame {
-public:
-	int usedRegisters[14] = {0};
 };
 
 class AsmState {
 	int stackDepth = 0;
 	std::vector<AsmVar> vars;
-	std::vector<RegisterFrame> regFrames;
 	bool reachable = true;
+	int usedRegisters[14] = {0};
 public:
-
-	AsmState() {
-		RegisterFrame frame0;
-		regFrames.push_back(frame0);
-	}
 
 	std::string _asm;
 	int getFreeReg(int preferred = -1) {
 		if (preferred >= 0) {
-			if (regFrames.back().usedRegisters[preferred] == 0) {
+			if (usedRegisters[preferred] == 0) {
 				return preferred;
 			}
 		}
 		for (int i = 0; i < 14; i++) {
-			if (regFrames.back().usedRegisters[i] == 0) {
+			if (usedRegisters[i] == 0) {
 				return i;
 			}
 		}
@@ -49,11 +40,11 @@ public:
 		exit(1);
 	}
 	void lockReg(int reg) {
-		regFrames.back().usedRegisters[reg]++;
+		usedRegisters[reg]++;
 	}
 	void freeReg(int reg) {
-		if (regFrames.back().usedRegisters[reg] > 0) {
-			regFrames.back().usedRegisters[reg]--;
+		if (usedRegisters[reg] > 0) {
+			usedRegisters[reg]--;
 		} else {
 			std::cout << "attempt to free non-allocated register\n";
 			exit(1);
@@ -81,6 +72,11 @@ public:
 		_asm += "mov r" + std::to_string(to) + ", #" + std::to_string(val) + "\n";
 	}
 
+	void op_mov_label(int to, std::string label) {
+		if (!reachable) {return;}
+		_asm += "mov r" + std::to_string(to) + ", #" + label + "\n";
+	}
+
 	void op_mov_read_deref(int to, int from) {
 		if (!reachable) {return;}
 		_asm += "mov r" + std::to_string(to) + ", (r" + std::to_string(from) + ")\n";
@@ -104,10 +100,10 @@ public:
 	}
 
 	void declVar(std::string name, int forcedRegister=-1);
-	ValueRef* getVar(std::string name) {
+	int getVar(std::string name) {
 		for (int i = vars.size()-1; i >= 0; i--) {
 			if (vars[i].name == name) {
-				return vars[i].val;
+				return vars[i].reg;
 			}
 		}
 		std::cout << "variable '"+name+"' not in scope\n";
@@ -136,19 +132,16 @@ public:
 
 	void pushUsedRegs() {
 		for (int i = 0; i < 14; i++) {
-			if (regFrames.back().usedRegisters[i] > 0) {
+			if (usedRegisters[i] > 0) {
 				_asm += "sub r15, #1\n";
 				_asm += "mov (r15), r" + std::to_string(i) + "\n";
 			}
 		}
-		RegisterFrame newFrame;
-		regFrames.push_back(newFrame);
 	}
 
 	void popUsedRegs() {
-		regFrames.pop_back();
 		for (int i = 13; i >= 0; i--) {
-			if (regFrames.back().usedRegisters[i] > 0) {
+			if (usedRegisters[i] > 0) {
 				_asm += "mov r" + std::to_string(i) + ", (r15)\n";
 				_asm += "add r15, #1\n";
 			}
@@ -188,23 +181,23 @@ public:
 		type = Constant;
 		constval = val;
 	}
-
 	ValueRef(ValueRef& cpy) {
 		std::cout << "valueref should never be copied\n";
 		exit(1);
 	}
 
-	ValueRef* shallowCopy() {
+	bool copy = false;
+	/*ValueRef* shallowCopy() {
 		if (type == Constant) {
 			return new ValueRef(constval);
 		} else {
 			ValueRef* cpy = new ValueRef(0);
 			cpy->reg = reg;
-			state.lockReg(reg); // multi-lock
+			cpy->copy = true;
 			cpy->writable = writable;
 			cpy->type = Register;
 		}
-	}
+	}*/
 
 	void deref() {
 		if (type == Register) {
@@ -239,8 +232,6 @@ public:
 				state.lockReg(reg);
 				state.op_mov(reg, rhs->reg);
 				return;
-			} else {
-				std::cout << "err6\n";
 			}
 		} else if (type == Register) {
 			if (rhs->type == Constant) {
@@ -249,11 +240,7 @@ public:
 			} else if (rhs->type == Register) {
 				state.op_mov(reg, rhs->reg);
 				return;
-			} else {
-				std::cout << "err5\n";
 			}
-		} else {
-			std::cout << "err4 " << type << "\n";
 		}
 	}
 
@@ -277,8 +264,6 @@ public:
 					state.op_sub(reg, rhs->reg);
 				}
 				return;
-			} else {
-				std::cout << "err3\n";
 			}
 		} else if (type==Register) {
 			if (rhs->type == Constant) {
@@ -295,16 +280,46 @@ public:
 					state.op_sub(reg, rhs->reg);
 				}
 				return;
-			} else {
-				std::cout << "err2\n";
 			}
-		} else {
-			std::cout << "err1\n";
 		}
 	}
 
+	/*void shift(ValueRef* rhs) {
+		if (!writable) {
+			std::cout << "attempt to shift non-writable value\n";
+			exit(1);
+		}
+		if (type == Constant) {
+			if (rhs->type == Constant) {
+				constval = constval << rhs->constval;
+				return;
+			} else if (rhs->type == Register) {
+				type = Register;
+				reg = state.getFreeReg();
+				state.lockReg(reg);
+				state.op_mov_const(reg, constval);
+				
+				state.op_shift(reg, rhs->reg);
+				
+				return;
+			}
+		} else if (type==Register) {
+			if (rhs->type == Constant) {
+				
+				state.op_shift_const(reg, rhs->constval);
+				
+				return;
+			} else if (rhs->type == Register) {
+				
+				state.op_shift(reg, rhs->reg);
+				
+				return;
+			}
+		}
+	}*/
+
 	~ValueRef() {
-		if (type == Register) {
+		if (type == Register && !copy) {
 			state.freeReg(reg);
 		}
 	}

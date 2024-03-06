@@ -13,6 +13,17 @@ public:
 	~Call() {}
 };
 
+class MemLabel : public ParserNode {
+public:
+	MemLabel(bool c=false) : ParserNode(c){}
+	GRAMMAR(
+		{new Token("&"), new AlphaStr(true)}
+	)
+	ValueRef* getValue();
+
+	~MemLabel() {}
+};
+
 class Term : public ParserNode {
 public:
 	Term(bool c=false) : ParserNode(c){}
@@ -56,6 +67,8 @@ public:
 		{new Token("*"), new VarLabel(true)}
 	)
 	bool isDeref();
+	void unlock();
+	void lock();
 	void setValue(ValueRef* val);
 	ValueRef* getValue();
 	~VarLabel() {}

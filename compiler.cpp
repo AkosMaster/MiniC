@@ -7,15 +7,11 @@ void AsmState::declVar(std::string name, int forcedRegister) {
 	AsmVar var;
 	var.name = name;
 	if (forcedRegister >= 0) {
-		var.val = new ValueRef(0); // empty, custom register
-		var.val->type = Register;
-		var.val->reg = forcedRegister;
-		var.val->writable = false; // only true when assignment happens
-		state.lockReg(forcedRegister);
+		var.reg = forcedRegister;
 	} else {
-		var.val = new ValueRef(); // empty, reg-allocated
-		var.val->writable = false; // only true when assignment happens
+		var.reg = state.getFreeReg();
 	}
+	state.lockReg(var.reg);
 	var.scope = scope;
 	state.comment("variable created: " + name);
 	vars.push_back(var);
@@ -26,16 +22,24 @@ void AsmState::endBlock() {
 	for (int i = vars.size()-1; i >= 0; i--) {
 		if (vars[i].scope > scope) {
 			state.comment("variable '" + vars[i].name + "' went out of scope");
-			delete vars[i].val;
+			//delete vars[i].val;
+			state.freeReg(vars[i].reg);
 			vars.pop_back();
 		}
 	}
 }
 
 int main() {
+	std::string data;
 	std::string code;
+	bool in_code = false;
 	for (std::string line; std::getline(std::cin, line);) {
-        code += line;
+        if (!in_code) {
+        	data += line + "\n";
+        	if (line == "CODE") {in_code = true;}
+    	} else {
+    		code += line + "\n";
+    	}
     }
     //std::cout << code << std::endl;
 	{
@@ -52,7 +56,7 @@ int main() {
 
     	val.print();*/
     }
-    std::cout << state.getAsm() << std::endl;
+    std::cout << data << state.getAsm() << std::endl;
     //std::cout << "first free reg: " << state.getFreeReg() << std::endl;
     //std::cout << "over: hanging allocations=" << alloc_count << "\n";
     return 0;

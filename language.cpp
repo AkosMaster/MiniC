@@ -4,11 +4,14 @@ set_ext_GRAMMAR(Term,
 	{new Call(true)},
 	{new Number(true)},
 	{new Token("("), new Expr(true), new Token(")")},
-	{new VarLabel(true)}
+	{new VarLabel(true)},
+	{new MemLabel(true)}
 )
 
 set_ext_GRAMMAR(If,
+	{new Token("if"), new Token("("), new Expr(true), new Token(")"), new CodeBlock(true), new Token("else"), new CodeBlock(true)},
 	{new Token("if"), new Token("("), new Expr(true), new Token(")"), new CodeBlock(true)}
+	
 )
 
 set_ext_GRAMMAR(While,
@@ -65,6 +68,12 @@ ValueRef* Call::getValue(bool dropRet=false) {
 	return retval;
 }
 
+ValueRef* MemLabel::getValue() {
+	ValueRef* ref = new ValueRef();
+	state.op_mov_label(ref->reg, ((AlphaStr*)children[0])->text);
+	return ref;
+}
+
 ValueRef* Term::getValue() {
 	if (typeid(*children[0]) == typeid(Number)) {
 		// return constant vref
@@ -75,6 +84,8 @@ ValueRef* Term::getValue() {
 		return ((VarLabel*)children[0])->getValue();
 	} else if (typeid(*children[0]) == typeid(Call)) {
 		return ((Call*)children[0])->getValue();
+	} else if (typeid(*children[0]) == typeid(MemLabel)) {
+		return ((MemLabel*)children[0])->getValue();
 	}
 	std::cout << "Term getValue failed\n";
 	exit(1);
@@ -124,10 +135,12 @@ void Declaration::Assemble() {
 void VarLabel::setValue(ValueRef* val) {
 	if (typeid(*children[0]) == typeid(AlphaStr)) { // simple variable assignment
 		std::string name = ((AlphaStr*)children[0])->text;
-		ValueRef* var = state.getVar(name);
+		ValueRef* var = getValue();
 		state.comment("setting value of " + name);
+		var->writable = true;
 		var->set(val);
 		var->writable = false;
+		delete var;
 	} else { //deref
 		state.comment("variable dereference");
 		VarLabel* label = ((VarLabel*)children[0]);
@@ -142,6 +155,7 @@ void VarLabel::setValue(ValueRef* val) {
 		} else {
 			state.op_mov_write_deref(addr->reg, val->reg);
 		}
+		delete addr;
 	}
 }
 
@@ -153,11 +167,15 @@ ValueRef* VarLabel::getValue() {
 	if (!isDeref()) { // simple variable get
 		std::string name = ((AlphaStr*)children[0])->text;
 		
-		ValueRef* val_o = state.getVar(name);
+		int reg = state.getVar(name);
 
-		ValueRef* val_cpy = val_o->shallowCopy();
+		ValueRef* val_ref = new ValueRef(0);
+		val_ref->type = Register;
+		val_ref->writable = false;
+		val_ref->reg = reg;
+		state.lockReg(reg);
 
-		return val_cpy; // need to return new valueref, so that value reference is not deleted later
+		return val_ref; // need to return new valueref, so that value reference is not deleted later
 	} else { //deref
 		VarLabel* label = ((VarLabel*)children[0]);
 		ValueRef* val = label->getValue();
@@ -168,10 +186,6 @@ ValueRef* VarLabel::getValue() {
 
 void Assignment::Assemble() {
 	VarLabel* lefthand = (VarLabel*)children[0];
-	if (!lefthand->isDeref()) {
-		std::string name = ((AlphaStr*)lefthand->children[0])->text;
-		state.getVar(name)->writable = true;;
-	}
 	ValueRef* rightHand = ((Expr*)children[1])->getValue();
 	lefthand->setValue(rightHand);
 	delete rightHand;
@@ -181,6 +195,11 @@ int elseID = 0;
 void If::Assemble() {
 	ValueRef* condition = ((Expr*)children[0])->getValue();
 	CodeBlock* onTrue = (CodeBlock*)children[1];
+	CodeBlock* onFalse;
+	bool has_else = children.size() == 3;
+	if (has_else) {
+		onFalse = (CodeBlock*)children[2];
+	}
 
 	if (condition->type == Constant) {
 
@@ -192,14 +211,21 @@ void If::Assemble() {
 			onTrue->Assemble();
 		}
 
-	} else if (condition->type == Register) {
+	} else {
 		state._asm += "cmp r" + std::to_string(condition->reg) + ", #0\n";
 
 		delete condition;
 		int id = elseID++;
 		state._asm += "jz else_" + std::to_string(id) + "\n";
 		onTrue->Assemble();
+		if (has_else) {
+			state._asm += "jmp over_" + std::to_string(id) + "\n";
+		}
 		state.symbol("else_" + std::to_string(id));
+		if (has_else) {
+			onFalse->Assemble();
+			state.symbol("over_" + std::to_string(id));
+		}
 	}
 }
 
@@ -218,9 +244,10 @@ void While::Assemble() {
 		} else {
 			delete condition;
 			onTrue->Assemble();
+			state._asm += "jmp wbegin_" + std::to_string(id) + "\n";
 		}
 
-	} else if (condition->type == Register) {
+	} else {
 		delete condition;
 		state._asm += "cmp r" + std::to_string(condition->reg) + ", #0\n";
 		state._asm += "jz wend_" + std::to_string(id) + "\n";
